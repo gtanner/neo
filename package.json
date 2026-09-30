@@ -9,7 +9,8 @@
     "start": "electron .",
     "test:spellcheck": "node --test scripts/spellcheck.test.js",
     "test:dashes": "node --test scripts/dashes.test.js",
-    "package": "electron-builder --mac",
+    "package": "npm run package:mac",
+    "package:mac": "electron-builder --mac",
     "package:win": "electron-builder --win",
     "package:linux": "electron-builder --linux",
     "package:all": "electron-builder --mac --win --linux"
