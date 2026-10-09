@@ -122,6 +122,7 @@ npm run test:coverage      # node --test --experimental-test-coverage scripts/*.
 npm run lint               # oxlint, Electron's standard-style JavaScript rules
 npm run test:spellcheck    # node --test scripts/spellcheck.test.js
 npm run test:dashes        # node --test scripts/dashes.test.js
+npm run test:load          # node scripts/benchmark-save.js — save latency, then a 30s load. Optional seconds: npm run test:load -- 60
 npm run bundle             # Hugh: brings in the newest .bundle from ~/Downloads and pushes main
 npm run release            # Hugh: next version (x.y.9 → x.(y+1).0), commit, push, tag (npm run release -- 2.0.0 for another)
 npm run package:mac        # macOS build; npm run package calls this

@@ -6,6 +6,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, utilityProcess, scr
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execFile } = require('child_process');
 
 // Every disk request from the page passes through here: a write the system
 // refuses (see reportBlockedWrite) is explained to the writer, then the error
@@ -1263,6 +1264,7 @@ async function dailyBackup() {
       try { names = fs.readdirSync(dir); } catch (err) { missed.push(`${rel || '.'} (${err.code || err.message})`); return; }
       for (const name of names) {
         if (rel === '' && skip.has(name)) continue;
+        if (name === '.git') continue; // a book's history stays out of the zip, the way Backups and Exports do
         if (name === '.DS_Store' || /^\..+\.icloud$/.test(name)) continue; // Finder litter; iCloud's stand-in for a file not downloaded
         const full = path.join(dir, name);
         const relPath = rel ? rel + '/' + name : name;
@@ -1570,6 +1572,156 @@ ipcMain.on('view:state', (e, st) => {
   viewState = next;
   try { buildMenu(); } catch (err) { logError('menu', err); }
 });
+// File → Version History. The tick follows the window. The pass itself
+// reads library.json, so a tick alone never runs git.
+let versionTrackingState = false;
+let versionTrackingKnown = false;
+let historyRunning = false;
+let historySoon = null;
+
+const HISTORY_IGNORE = ['*.tmp', '*.bak', '.DS_Store'];
+
+function historyHooksPath() {
+  // an empty directory, so a hook that arrived with a synced book cannot
+  // stall the pass. The writer's own git config is left untouched.
+  const dir = path.join(app.getPath('userData'), 'neo-git-hooks');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function runGit(cwd, args) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd,
+      env: Object.assign({}, process.env, { GIT_TERMINAL_PROMPT: '0' }),
+      windowsHide: true
+    }, (err, stdout, stderr) => {
+      if (err) {
+        if (stdout) err.stdout = stdout;
+        if (stderr) err.stderr = stderr;
+        reject(err);
+        return;
+      }
+      resolve({ stdout: stdout || '', stderr: stderr || '' });
+    });
+  });
+}
+
+// The three lines, added only when missing. A file that already has them
+// is history of its own and is not rewritten.
+function ensureHistoryGitignore(dir) {
+  const file = path.join(dir, '.gitignore');
+  let text = null;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      logError('history', err);
+      return false;
+    }
+  }
+  const have = text == null ? [] : text.split(/\r?\n/);
+  const missing = HISTORY_IGNORE.filter((line) => !have.includes(line));
+  if (text != null && !missing.length) return true;
+  const body = text == null
+    ? HISTORY_IGNORE.join('\n') + '\n'
+    : (text.endsWith('\n') || text === '' ? text : text + '\n') + missing.join('\n') + '\n';
+  try {
+    fs.writeFileSync(file, body);
+    return true;
+  } catch (err) {
+    logError('history', err);
+    return false;
+  }
+}
+
+async function commitBookHistory(dir) {
+  if (!fs.existsSync(path.join(dir, '.git'))) await runGit(dir, ['init']);
+  if (!ensureHistoryGitignore(dir)) return;
+  const status = await runGit(dir, ['status', '--porcelain']);
+  if (!String(status.stdout || '').trim()) return;
+  await runGit(dir, ['add', '-A']);
+  await runGit(dir, [
+    '-c', 'user.name=NEO',
+    '-c', 'user.email=neo@localhost',
+    '-c', 'commit.gpgsign=false',
+    '-c', 'core.hooksPath=' + historyHooksPath(),
+    'commit', '-m', 'NEO'
+  ]);
+}
+
+// One pass. A second call while this is still walking books does nothing.
+// Saves do not call it: they return when the file is durable.
+async function commitHistories() {
+  if (historyRunning) return;
+  historyRunning = true;
+  try {
+    const lib = readJSON(LIBRARY_FILE, {});
+    if (!lib || lib.versionTracking !== true) return;
+    let names;
+    try {
+      names = fs.readdirSync(LIBRARY_DIR);
+    } catch (err) {
+      logError('history', err);
+      return;
+    }
+    let gitMissing = false;
+    for (const name of names) {
+      if (gitMissing) break;
+      if (!name.startsWith('book-')) continue;
+      const dir = path.join(LIBRARY_DIR, name);
+      let st;
+      try { st = fs.statSync(dir); } catch { continue; }
+      if (!st.isDirectory()) continue;
+      if (!fs.existsSync(path.join(dir, 'book.json'))) continue;
+      try {
+        await commitBookHistory(dir);
+      } catch (err) {
+        if (err && err.code === 'ENOENT') {
+          logError('history', err);
+          gitMissing = true;
+          break;
+        }
+        logError('history', new Error(name + ': ' + (err && err.stack ? err.stack : err)));
+      }
+    }
+  } finally {
+    historyRunning = false;
+  }
+}
+
+function runHistoryPass() {
+  commitHistories().catch((err) => logError('history', err));
+}
+
+function startHistorySchedule() {
+  // after the first paint, then at most once an hour
+  setTimeout(runHistoryPass, 60 * 1000);
+  setInterval(runHistoryPass, 60 * 60 * 1000);
+}
+
+function scheduleHistorySoon() {
+  if (historySoon) clearTimeout(historySoon);
+  historySoon = setTimeout(() => {
+    historySoon = null;
+    runHistoryPass();
+  }, 1000);
+}
+
+// The window reports the stored preference when the library loads, and
+// again when the writer uses the checkbox. The first report only ticks
+// the menu. Turning it on after that schedules a pass; this handler
+// does not run git itself.
+ipcMain.on('versionTracking:state', (_e, on) => {
+  on = !!on;
+  const turnedOn = versionTrackingKnown && on && !versionTrackingState;
+  versionTrackingKnown = true;
+  if (on === versionTrackingState) return;
+  versionTrackingState = on;
+  try { buildMenu(); } catch (err) { logError('menu', err); }
+  if (turnedOn) scheduleHistorySoon();
+});
+
 // File → New Books Open To: the pantser/plotter choice, kept in library.json
 let writingStyle = 'pantser';
 ipcMain.on('style:state', (_e, style) => {
@@ -1648,6 +1800,12 @@ function buildMenu() {
             { label: t('Blank Page'), type: 'radio', checked: writingStyle !== 'plotter', click: () => sendToWindow({ type: 'writingStyle', value: 'pantser' }) },
             { label: t('Outline First'), type: 'radio', checked: writingStyle === 'plotter', click: () => sendToWindow({ type: 'writingStyle', value: 'plotter' }) }
           ]
+        },
+        {
+          label: t('Version History'),
+          type: 'checkbox',
+          checked: versionTrackingState,
+          click: () => sendToWindow({ type: 'versionTracking' })
         },
         { type: 'separator' },
         {
@@ -2245,6 +2403,7 @@ app.whenReady().then(() => {
     try { initSpell(); } catch (err) { logError('spell', err); }
     try { buildMenu(); } catch (err) { logError('menu', err); }
     try { dailyBackup(); } catch (err) { logError('backup', err); }
+    try { startHistorySchedule(); } catch (err) { logError('history', err); }
     try { checkForUpdates(); } catch (err) { logError('updater', err); }
   } catch (err) {
     // catastrophic: tell the human instead of dying in silence

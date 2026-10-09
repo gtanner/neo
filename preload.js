@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('neo', {
   poetryState: (on) => ipcRenderer.send('poetry:state', on),
   flushState: (on) => ipcRenderer.send('flush:state', on),
   typewriterState: (st) => ipcRenderer.send('typewriter:state', st),
+  versionTrackingState: (on) => ipcRenderer.send('versionTracking:state', on),
   vimState: (on) => ipcRenderer.send('vim:state', on),
   uiZoomState: (z) => ipcRenderer.send('uizoom:state', z),
   // interface language, fetched once before the page's scripts run

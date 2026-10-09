@@ -509,6 +509,7 @@ async function loadLibrary() {
   libraryDirPath = await window.neo.libraryPath();
   library = await window.neo.readLibrary();
   if (window.neo.writingStyleState) window.neo.writingStyleState(library.writingStyle);
+  if (window.neo.versionTrackingState) window.neo.versionTrackingState(!!library.versionTracking);
   if (!library.firstRunDone) {
     showFirstRun();
   }
@@ -9480,6 +9481,12 @@ window.neo.onMenu(async (msg) => {
     library.writingStyle = msg.value;
     await writeLibrary(library);
     if (window.neo.writingStyleState) window.neo.writingStyleState(library.writingStyle);
+  }
+  if (msg.type === 'versionTracking') {
+    library.versionTracking = !library.versionTracking;
+    await writeLibrary(library);
+    if (window.neo.versionTrackingState) window.neo.versionTrackingState(!!library.versionTracking);
+    toast(library.versionTracking ? t('Version history on') : t('Version history off'));
   }
   if (msg.type === 'coverArt') openCoverArt();
   if (msg.type === 'align') {
