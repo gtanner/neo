@@ -1641,12 +1641,14 @@ async function commitBookHistory(dir) {
   const status = await runGit(dir, ['status', '--porcelain']);
   if (!String(status.stdout || '').trim()) return;
   await runGit(dir, ['add', '-A']);
+  // Author from the writer's git config, the way an agent commit does.
+  // NEO only appears as Co-authored-by, with the app version.
   await runGit(dir, [
-    '-c', 'user.name=NEO',
-    '-c', 'user.email=neo@localhost',
     '-c', 'commit.gpgsign=false',
     '-c', 'core.hooksPath=' + historyHooksPath(),
-    'commit', '-m', 'NEO'
+    'commit',
+    '-m', 'Version history',
+    '-m', 'Co-authored-by: NEO ' + app.getVersion() + ' <neo@localhost>'
   ]);
 }
 

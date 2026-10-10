@@ -24,6 +24,7 @@ function loadMain() {
       commandLine: { appendSwitch() {} },
       getPath: () => os.tmpdir(),
       getLocale: () => 'en',
+      getVersion: () => localRequire('./package.json').version,
       requestSingleInstanceLock: () => true,
       whenReady: () => ({ then() {} }),
       on() {}
@@ -80,6 +81,20 @@ function commitCount(dir) {
   return Number(gitOut(dir, ['rev-list', '--count', 'HEAD']));
 }
 
+function gitUserName() {
+  return execFileSync('git', ['config', 'user.name'], { encoding: 'utf8' }).trim();
+}
+
+function assertHistoryCommit(folder) {
+  const version = localRequire('./package.json').version;
+  assert.equal(gitOut(folder, ['log', '-1', '--format=%s']), 'Version history');
+  assert.equal(gitOut(folder, ['log', '-1', '--format=%an']), gitUserName());
+  assert.match(
+    gitOut(folder, ['log', '-1', '--format=%b']),
+    new RegExp('^Co-authored-by: NEO ' + version.replace(/\./g, '\\.') + ' <neo@localhost>$')
+  );
+}
+
 function stamp(file) {
   const st = fs.statSync(file);
   return st.mtimeMs + ':' + st.size;
@@ -114,8 +129,7 @@ describe('version history', { concurrency: 1 }, () => {
       await histories();
       assert.equal(fs.existsSync(path.join(folder, '.git')), true);
       assert.equal(commitCount(folder), 1);
-      assert.equal(gitOut(folder, ['log', '-1', '--format=%s']), 'NEO');
-      assert.equal(gitOut(folder, ['log', '-1', '--format=%an']), 'NEO');
+      assertHistoryCommit(folder);
       const ignore = fs.readFileSync(path.join(folder, '.gitignore'), 'utf8');
       for (const line of ['*.tmp', '*.bak', '.DS_Store']) assert.equal(ignore.includes(line), true);
 
@@ -145,7 +159,7 @@ describe('version history', { concurrency: 1 }, () => {
       assert.equal(commitCount(folder), before + 1);
       assert.equal(stamp(file), mark);
       assert.equal(fs.readFileSync(file, 'utf8'), html);
-      assert.equal(gitOut(folder, ['log', '-1', '--format=%s']), 'NEO');
+      assertHistoryCommit(folder);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

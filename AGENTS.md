@@ -6,6 +6,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before adding a feature. The product is 
 
 ## Rules that override convenience
 
+- **Never delete a developer's data.** While an agent works in this repo, do not remove, empty, trash, overwrite, or `rm -rf` the real NEO Library, any book folder under it, `userData` (`settings.json`, `secrets.json`), or the writer's manuscripts. Inspect and read when asked. Tests use a temporary library only (`fs.mkdtempSync` under `os.tmpdir()`), never `~/Documents/NEO Library` or another path the developer pointed File → Library Folder… at. If cleanup is needed, ask first and only touch paths you created in that session.
 - Nothing interrupts a writer mid-sentence. No popups, no squiggles, no notifications while typing. Spellcheck is off until the writer asks for a pass.
 - Controls stay hidden until hover or keyboard focus.
 - Words are never discarded. Deleting text, unbinding a shelf, or losing a trash operation must leave the words recoverable (Darlings, a sibling chapter, or the system trash). `book:delete` uses `shell.trashItem`. If trash fails, leave the folder and show it.
