@@ -1227,7 +1227,8 @@ ipcMain.handle('import:pick', async () => {
 const ERROR_LOG = () => path.join(LIBRARY_DIR, 'neo-errors.log');
 
 function logError(source, err) {
-  const line = `[${new Date().toISOString()}] [${source}] ${err && err.stack ? err.stack : String(err)}\n`;
+  const text = err && err.stack ? err.stack : String(err);
+  const line = `[${new Date().toISOString()}] [${source}] ${text}\n`;
   try {
     ensureLibrary();
     fs.appendFileSync(ERROR_LOG(), line);
@@ -1236,6 +1237,13 @@ function logError(source, err) {
     // app folder takes the line instead
     try { fs.appendFileSync(path.join(app.getPath('userData'), 'neo-errors.log'), line); } catch { /* never let logging crash the app */ }
   }
+  // Version history also prints to the terminal when running from npm start.
+  if (source === 'history') console.error('[history]', text);
+}
+
+// Version history observability for the terminal (npm start). Not a library file.
+function logHistory(message) {
+  console.log('[history]', message);
 }
 
 process.on('uncaughtException', (err) => logError('main', err));
@@ -1607,6 +1615,30 @@ function runGit(cwd, args) {
   });
 }
 
+// Empty string when the key is unset (git exits 1). ENOENT still throws.
+async function gitConfigGet(key) {
+  try {
+    return String((await runGit(LIBRARY_DIR, ['config', '--get', key])).stdout || '').trim();
+  } catch (err) {
+    if (err && err.code === 'ENOENT') throw err;
+    return '';
+  }
+}
+
+async function logGitIdentity() {
+  try {
+    const name = await gitConfigGet('user.name');
+    const email = await gitConfigGet('user.email');
+    logHistory('git identity name=' + JSON.stringify(name) + ' email=' + JSON.stringify(email));
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      logHistory('git not found');
+      return;
+    }
+    logError('history', err);
+  }
+}
+
 // The three lines, added only when missing. A file that already has them
 // is history of its own and is not rewritten.
 function ensureHistoryGitignore(dir) {
@@ -1635,6 +1667,31 @@ function ensureHistoryGitignore(dir) {
   }
 }
 
+function countHistoryBooks() {
+  let books = 0;
+  let names;
+  try { names = fs.readdirSync(LIBRARY_DIR); } catch { return 0; }
+  for (const name of names) {
+    if (!name.startsWith('book-')) continue;
+    const dir = path.join(LIBRARY_DIR, name);
+    let st;
+    try { st = fs.statSync(dir); } catch { continue; }
+    if (!st.isDirectory()) continue;
+    if (!fs.existsSync(path.join(dir, 'book.json'))) continue;
+    books++;
+  }
+  return books;
+}
+
+function logHistoryEnabled() {
+  logHistory(
+    'version control enabled' +
+    ' version=' + app.getVersion() +
+    ' books=' + countHistoryBooks() +
+    ' library=' + LIBRARY_DIR
+  );
+}
+
 async function commitBookHistory(dir) {
   if (!fs.existsSync(path.join(dir, '.git'))) await runGit(dir, ['init']);
   if (!ensureHistoryGitignore(dir)) return;
@@ -1643,13 +1700,32 @@ async function commitBookHistory(dir) {
   await runGit(dir, ['add', '-A']);
   // Author from the writer's git config, the way an agent commit does.
   // NEO only appears as Co-authored-by, with the app version.
+  // useConfigOnly: no guessed gord@host author when the writer has no git identity.
   await runGit(dir, [
+    '-c', 'user.useConfigOnly=true',
     '-c', 'commit.gpgsign=false',
     '-c', 'core.hooksPath=' + historyHooksPath(),
     'commit',
     '-m', 'Version history',
     '-m', 'Co-authored-by: NEO ' + app.getVersion() + ' <neo@localhost>'
   ]);
+  let commit = '';
+  try {
+    commit = String((await runGit(dir, ['rev-parse', '--short', 'HEAD'])).stdout || '').trim();
+  } catch (err) {
+    logError('history', err);
+  }
+  let title = '';
+  try {
+    const meta = readJSON(path.join(dir, 'book.json'), {});
+    if (meta && meta.title) title = String(meta.title);
+  } catch { /* title is only for the log line */ }
+  logHistory(
+    'checkpoint saved' +
+    ' book=' + path.basename(dir) +
+    (title ? ' title=' + JSON.stringify(title) : '') +
+    (commit ? ' commit=' + commit : '')
+  );
 }
 
 // One pass. A second call while this is still walking books does nothing.
@@ -1697,6 +1773,7 @@ function runHistoryPass() {
 }
 
 function startHistorySchedule() {
+  logGitIdentity().catch((err) => logError('history', err));
   // after the first paint, then at most once an hour
   setTimeout(runHistoryPass, 60 * 1000);
   setInterval(runHistoryPass, 60 * 60 * 1000);
@@ -1721,6 +1798,10 @@ ipcMain.on('versionTracking:state', (_e, on) => {
   if (on === versionTrackingState) return;
   versionTrackingState = on;
   try { buildMenu(); } catch (err) { logError('menu', err); }
+  try {
+    if (on) logHistoryEnabled();
+    else logHistory('version control disabled');
+  } catch (err) { logError('history', err); }
   if (turnedOn) scheduleHistorySoon();
 });
 
