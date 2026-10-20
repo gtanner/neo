@@ -127,7 +127,7 @@
         <span id="word-counter" data-i18n-title title="Click to cycle book / chapter word count"></span>
         <span id="zoom-control" hidden><button id="zoom-out">&#8722;</button><span id="zoom-level">100%</span><button id="zoom-in">+</button></span>
       </div>
-      <button id="pocket-more" data-i18n-title title="Format, focus, goals" data-i18n-label="Format, focus, goals">&#8943;</button>
+      <button id="pocket-more" data-i18n-title title="Format and goals" data-i18n-label="Format and goals">&#8943;</button>
     </footer>
 
     <!-- Undo / redo, while the on-screen keyboard is up -->
@@ -202,8 +202,9 @@
       else if (dx > 0 && side.classList.contains('open')) side.classList.remove('open');
       start = null;
     }, { passive: true });
-    // ⋯ opens a sheet of the desktop's Format and View menus. Every row
-    // sends the same message the menu bar would; the page answers as usual.
+    // ⋯ opens a sheet of the desktop's Format and View menus, as simple NEO
+    // has them (Pocket is always simple). Every row sends the same message
+    // the menu bar would; the page answers as usual.
     const more = document.getElementById('pocket-more');
     const menuWrap = document.getElementById('pocket-menu');
     const sheet = document.getElementById('pocket-menu-sheet');
@@ -213,7 +214,6 @@
       const lib = (typeof library !== 'undefined' && library) || {};
       const fonts = lib.fonts || {};
       const st = window.pocketState || {};
-      const focusNow = (typeof focusLevel !== 'undefined') ? focusLevel : 'off';
       // labels come through t() (app.js), so the sheet speaks the interface language
       const onOff = (on) => (on ? '✓ ' + t('On') : t('Off'));
       const seg = (label, opts, current, mk) => `<div class="pm-row"><span class="pm-label">${label}</span><span class="pm-seg">` +
@@ -228,21 +228,15 @@
         seg(t('Text size'), [[-1, t('Smaller')], [0, t('Reset')], [1, t('Larger')]], null, (v) => ({ type: 'fontSize', value: v })) +
         (script ? '' : seg(t('Drop cap'), [['literary', t('Literary')], ['fantasy', t('Fantasy')], ['scifi', t('Sci-Fi')], ['none', t('Off')]], fonts.dropcap || 'literary', (v) => ({ type: 'dropCap', value: v }))) +
         seg(t('Page'), [['night', t('Night')], ['paper', t('Paper')], ['light', t('Light')]], lib.pageTheme || 'night', (v) => ({ type: 'pageTheme', value: v })) +
-        seg(t('Focus mode'), [['off', t('Off')], ['paragraph', t('Paragraph')], ['sentence', t('Sentence')]], focusNow, (v) => ({ type: 'focus', value: v })) +
         tick(t('Typewriter scrolling'), st.typewriter, { type: 'typewriter' }) +
+        // (the dictionary is the desktop's choice, which comes along in library.json)
         tick(t('Spellcheck'), typeof spellOn !== 'undefined' && spellOn, { type: 'spellcheck' }) +
-        // the dictionary, only while spellcheck is on (the desktop's choice comes along in library.json)
-        (typeof spellOn !== 'undefined' && spellOn && window.pocketSpellLanguages
-          ? `<div class="pm-row"><span class="pm-label">${t('Dictionary')}</span><span class="pm-seg pm-wrap">` +
-            Object.entries(window.pocketSpellLanguages()).map(([code, name]) => `<button class="${code === (lib.spellLanguage || window.pocketSpellLanguage()) ? 'on' : ''}" data-msg='${JSON.stringify({ type: 'spellLanguage', value: code })}'>${name}</button>`).join('') + '</span></div>'
-          : '') +
-        (script ? '' : tick(t('Flush paragraph') + '  ⇧Enter', st.flush, { type: 'flush' }) +
-        tick(t('Poetry paragraph') + '  Ctrl+⇧Enter', st.poetry, { type: 'poetry' })) +
+        (script ? '' : tick(t('Flush paragraph') + '  ⇧Enter', st.flush, { type: 'flush' })) +
         (window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'ios' ? '' :
           `<div class="pm-row"><span class="pm-label">${t('On-screen keyboard')}</span><span class="pm-seg"><button data-act="keyboard">${onOff(!(window.pocketSoftKeyboardOn && !window.pocketSoftKeyboardOn()))}</button></span></div>`) +
         (typeof book !== 'undefined' && book
           ? `<div class="pm-row"><span class="pm-label">${t('Export')}</span><span class="pm-seg pm-wrap">` +
-            (script ? [['fountain', 'Fountain'], ['fdx', 'Final Draft']] : [['txt', t('Text')], ['md', 'Markdown'], ['html', 'HTML'], ['docx', 'Word'], ['epub', 'EPUB']]).map(([f, l]) => `<button data-msg='${JSON.stringify({ type: 'export', format: f })}'>${l}</button>`).join('') + '</span></div>'
+            (script ? [['fountain', 'Fountain'], ['fdx', 'Final Draft']] : [['docx', 'Word'], ['epub', 'EPUB']]).map(([f, l]) => `<button data-msg='${JSON.stringify({ type: 'export', format: f })}'>${l}</button>`).join('') + '</span></div>'
           : '') +
         `<div class="pm-row pm-actions"><button data-msg='${JSON.stringify({ type: 'stats' })}'>${t('Goals…')}</button><button data-msg='${JSON.stringify({ type: 'help' })}'>${t('Keyboard shortcuts')}</button><button data-act="close">${t('Done')}</button></div>`;
     }
@@ -263,7 +257,6 @@
         send(msg);
         if (msg.type === 'stats' || msg.type === 'help' || msg.type === 'export') { closeMenu(); return; }
         setTimeout(buildMenu, 60); // reflect the new state
-        if (msg.type === 'spellLanguage') setTimeout(buildMenu, 1500); // once the dictionary is in
       }
     });
     document.addEventListener('keydown', (e) => {

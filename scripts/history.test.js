@@ -37,7 +37,18 @@ function loadMain() {
     BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => [] },
     Menu: { buildFromTemplate: (items) => items, setApplicationMenu() {} },
     dialog: {},
-    utilityProcess: { fork: () => ({ on() {}, postMessage() {} }) },
+    // the backup's own process: the real backup-worker.js, as a Node child
+    // (history's daily-zip test needs a real zip so it can assert .git is out)
+    utilityProcess: {
+      fork: (file) => {
+        const child = require('node:child_process').fork(file, []);
+        return {
+          on: (ev, fn) => child.on(ev, ev === 'exit' ? (code) => fn(code || 0) : fn),
+          postMessage: (m) => child.send(m),
+          kill: () => child.kill()
+        };
+      }
+    },
     screen: {}
   };
   const context = vm.createContext({
@@ -45,6 +56,8 @@ function loadMain() {
     __dirname: root,
     process: { platform: process.platform, env: process.env, on() {} },
     console,
+    setTimeout,
+    clearTimeout,
     libraryRoot: os.tmpdir()
   });
   vm.runInContext(source, context, { filename: path.join(root, 'main.js') });

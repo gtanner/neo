@@ -17,6 +17,7 @@ NEO currently speaks:
 | `ro` | Română | complete, machine-assisted: native review welcome |
 | `ru` | Русский | complete, reviewed by a native speaker |
 | `hu` | Magyar | complete, reviewed by a native speaker |
+| `ko` | 한국어 | complete, machine-assisted: native review welcome |
 
 Spellchecking (Edit → Spellcheck Language) covers English, French, Spanish, German, Dutch, Polish, Brazilian Portuguese, Romanian, Russian, Hungarian and Swedish. The engine is Hunspell itself, compiled to WebAssembly, so every dictionary loads in well under a second. Italian is left out because the only Hunspell dictionary on npm is GPL-3.0-only, which does not sit well in an MIT app. The Brazilian Portuguese interface starts with the Brazilian dictionary; the European Portuguese interface leaves the choice to the writer, since spellings differ.
 
@@ -71,7 +72,7 @@ So `fr-CA.json` is short: in Quebec, "courriel" instead of "e-mail", and no spac
 
 ## Typing in each language
 
-While writing, NEO sets the quotation marks of the language being written: the spellcheck language when one is chosen, otherwise NEO's own language. « » for French (with narrow no-break spaces), Spanish, Italian, European Portuguese and Russian; „ “ for German; „ ” for Polish, Romanian and Hungarian; “ ” for English, Dutch and Brazilian Portuguese; ” ” for Swedish. Swedish books set in »…» keep that style. The apostrophe is always ’. French also gets a narrow no-break space before ; : ! ? (before : only in Canadian French). The table is `QUOTE_STYLES` in `app.js`.
+While writing, NEO sets the quotation marks of the language being written: the spellcheck language when one is chosen, otherwise NEO's own language. « » for French (with narrow no-break spaces), Spanish, Italian, European Portuguese and Russian; „ “ for German; „ ” for Polish, Romanian and Hungarian; “ ” for English, Dutch, Brazilian Portuguese and Korean; ” ” for Swedish. Swedish books set in »…» keep that style. The apostrophe is always ’. French also gets a narrow no-break space before ; : ! ? (before : only in Canadian French). The table is `QUOTE_STYLES` in `app.js`.
 
 A book that has settled on other guillemets keeps them: in a German novel set in »…«, or Swiss writing in «…», type the first mark by hand and NEO carries on in that style (`bookQuotes` in `app.js`).
 
@@ -79,7 +80,9 @@ Imports recognize chapter headings in all these languages (`CHAPTER_WORDS` in `m
 
 ## Fonts in other alphabets
 
-Most fonts NEO bundles (the body fonts on Linux, the drop caps and the cover titles, in `fonts/`) have Latin letters only. For Russian, each has a companion under the same font name in `styles.css` that supplies the Cyrillic letters, so Latin text looks exactly as before. A language with letters of its own needs the same check: every bundled font, companions included, must carry them.
+Most fonts NEO bundles (the body fonts on Linux, the drop caps and the cover titles, in `fonts/`) have Latin letters only. For Russian, each has a companion under the same font name in `styles.css` that supplies the Cyrillic letters, so Latin text looks exactly as before. A language with letters of its own needs the same check: every bundled font, companions included, must carry them. Korean has them too: Noto Serif KR for the serif faces, Noto Sans KR for the sans ones, each cut down to Hangul (the syllables, the jamo and CJK punctuation) as one variable file, so every weight comes from it. Hanja still come from the system's fonts.
+
+Korean also changes how the interface sets its labels (the end of `styles.css`): words are kept whole when a line wraps, the wide letter-spacing of the small labels is narrowed, and Hangul is never slanted into a fake italic.
 
 ## For developers
 
