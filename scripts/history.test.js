@@ -228,7 +228,7 @@ describe('version history', { concurrency: 1 }, () => {
       });
       assert.equal(fs.existsSync(path.join(folder, '.git')), true);
       assert.equal(commitCount(folder), 1);
-      assertHistoryCommit(folder);
+      assertHistoryCommit(folder, 'Version history — Hello');
       const ignore = fs.readFileSync(path.join(folder, '.gitignore'), 'utf8');
       for (const line of ['*.tmp', '*.bak', '.DS_Store', 'snapshots']) {
         assert.equal(ignore.split(/\r?\n/).includes(line), true);
@@ -345,7 +345,7 @@ describe('version history', { concurrency: 1 }, () => {
       assert.equal(commitCount(folder), before + 1);
       assert.equal(stamp(file), mark);
       assert.equal(fs.readFileSync(file, 'utf8'), html);
-      assertHistoryCommit(folder);
+      assertHistoryCommit(folder, 'Version history — Hello');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -505,7 +505,7 @@ describe('version history', { concurrency: 1 }, () => {
       const lines = await withHistoryConsole(async () => { await checkpoint(one.id, 'k'); });
       assert.equal(commitCount(folderOne), beforeOne + 1);
       assert.equal(commitCount(folderTwo), beforeTwo);
-      assertHistoryCommit(folderOne, 'Version history: taken by you');
+      assertHistoryCommit(folderOne, 'Version history: taken by you — One');
       assert.equal(lines.filter((l) => l.includes('checkpoint saved')).length, 1);
       assert.match(lines.join('\n'), new RegExp(
         'book=' + one.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '.* kind=k'
@@ -522,20 +522,71 @@ describe('version history', { concurrency: 1 }, () => {
       const folder = path.join(dir, book.id);
       setTracking(true);
       await withHistoryConsole(async () => { await histories(); });
-      assertHistoryCommit(folder, 'Version history'); // turn-on / full pass: no kind
+      assertHistoryCommit(folder, 'Version history — Hello'); // turn-on / full pass: no kind
 
       main.call('chapter:write', book.id, 'c1', '<p>Morning.</p>');
       await withHistoryConsole(async () => { await checkpoint(book.id, 'd'); });
-      assertHistoryCommit(folder, 'Version history: start of the day');
+      assertHistoryCommit(folder, 'Version history: start of the day — Hello');
 
       main.call('chapter:write', book.id, 'c1', '<p>Morning. Afternoon.</p>');
       await withHistoryConsole(async () => { await checkpoint(book.id, 'k'); });
-      assertHistoryCommit(folder, 'Version history: taken by you');
+      assertHistoryCommit(folder, 'Version history: taken by you — Hello');
 
       main.call('chapter:write', book.id, 'c1', '<p>Before restore.</p>');
       await withHistoryConsole(async () => { await checkpoint(book.id, 'r'); });
-      assertHistoryCommit(folder, 'Version history: before a restore');
+      assertHistoryCommit(folder, 'Version history: before a restore — Hello');
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('book inside a library repo commits there, scoped to the book', async () => {
+    const dir = tempLibrary();
+    try {
+      execFileSync('git', ['-c', 'init.defaultBranch=main', 'init'], {
+        cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+      });
+      const one = main.call('book:create', { title: 'One', author: 'Ada' });
+      const two = main.call('book:create', { title: 'Two', author: 'Ada' });
+      setTracking(true);
+      const lines = await withHistoryConsole(async () => { await histories(); });
+      assert.equal(fs.existsSync(path.join(dir, one.id, '.git')), false);
+      assert.equal(fs.existsSync(path.join(dir, two.id, '.git')), false);
+      assert.equal(fs.existsSync(path.join(dir, '.git')), true);
+      assert.ok(commitCount(dir) >= 1);
+      assert.match(lines.join('\n'), /repo=/);
+
+      main.call('chapter:write', one.id, 'c1', '<p>Only the first book.</p>');
+      await withHistoryConsole(async () => { await checkpoint(one.id, 'k'); });
+      assertHistoryCommit(dir, 'Version history: taken by you — One');
+      const names = gitOut(dir, ['show', '--name-only', '--format=', 'HEAD'])
+        .split('\n').map((s) => s.trim()).filter(Boolean);
+      assert.ok(names.length > 0);
+      assert.equal(names.every((f) => f === one.id || f.startsWith(one.id + '/')), true);
+      assert.equal(names.some((f) => f === two.id || f.startsWith(two.id + '/')), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('home as git toplevel is ignored; book gets its own repo', async () => {
+    const dir = tempLibrary();
+    try {
+      // pretend the library root is $HOME so resolveHistoryRepo refuses it
+      execFileSync('git', ['-c', 'init.defaultBranch=main', 'init'], {
+        cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+      });
+      vm.runInContext(
+        'os.homedir = () => ' + JSON.stringify(dir),
+        main.context
+      );
+      const book = main.call('book:create', { title: 'Solo', author: 'Ada' });
+      setTracking(true);
+      await withHistoryConsole(async () => { await histories(); });
+      assert.equal(fs.existsSync(path.join(dir, book.id, '.git')), true);
+      assertHistoryCommit(path.join(dir, book.id), 'Version history — Solo');
+    } finally {
+      vm.runInContext('os.homedir = require("os").homedir', main.context);
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

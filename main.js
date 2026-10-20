@@ -2670,27 +2670,70 @@ function logHistoryEnabled() {
 }
 
 // Snapshot kinds from the window (k / d / r). A full pass (turn tracking on)
-// has no kind and keeps the plain subject.
-function historyCommitSubject(kind) {
-  if (kind === 'k') return 'Version history: taken by you';
-  if (kind === 'd') return 'Version history: start of the day';
-  if (kind === 'r') return 'Version history: before a restore';
-  return 'Version history';
+// has no kind and keeps the plain subject. The book title is appended when
+// known so a library-wide repo's log names which book changed.
+function historyCommitSubject(kind, title) {
+  let base = 'Version history';
+  if (kind === 'k') base = 'Version history: taken by you';
+  else if (kind === 'd') base = 'Version history: start of the day';
+  else if (kind === 'r') base = 'Version history: before a restore';
+  const t = title && String(title).trim().replace(/[\r\n]+/g, ' ');
+  return t ? base + ' — ' + t : base;
+}
+
+function pathIsInside(parent, child) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+// Accidental repos at $HOME or the drive root must not swallow every book.
+function historyToplevelUnsafe(top) {
+  const resolved = path.resolve(top);
+  if (resolved === path.parse(resolved).root) return true;
+  try {
+    if (resolved === path.resolve(os.homedir())) return true;
+  } catch { /* homedir unavailable */ }
+  return false;
+}
+
+// Prefer an enclosing repository (library / world wiki). Otherwise one .git
+// per book. Pathspec limits add/status to that book when cwd is above it.
+async function resolveHistoryRepo(bookDir) {
+  let top = '';
+  try {
+    top = String((await runGit(bookDir, ['rev-parse', '--show-toplevel'])).stdout || '').trim();
+  } catch (err) {
+    if (err && err.code === 'ENOENT') throw err;
+  }
+  if (top && pathIsInside(top, bookDir) && !historyToplevelUnsafe(top)) {
+    const rel = path.relative(path.resolve(top), path.resolve(bookDir));
+    const pathspec = rel === '' ? null : rel.split(path.sep).join('/');
+    return { cwd: path.resolve(top), pathspec };
+  }
+  if (!fs.existsSync(path.join(bookDir, '.git'))) await runGit(bookDir, ['init']);
+  return { cwd: bookDir, pathspec: null };
 }
 
 async function commitBookHistory(dir, kind) {
   // identity before init: no empty .git left behind when commits cannot run
   await requireGitIdentity();
-  if (!fs.existsSync(path.join(dir, '.git'))) await runGit(dir, ['init']);
+  const { cwd, pathspec } = await resolveHistoryRepo(dir);
   if (!ensureHistoryGitignore(dir)) return;
-  const status = await runGit(dir, ['status', '--porcelain']);
+  const statusArgs = ['status', '--porcelain'];
+  if (pathspec) statusArgs.push('--', pathspec);
+  const status = await runGit(cwd, statusArgs);
   if (!String(status.stdout || '').trim()) return;
-  await runGit(dir, ['add', '-A']);
+  await runGit(cwd, pathspec ? ['add', '-A', '--', pathspec] : ['add', '-A']);
   // Author from the writer's git config. Neo-Version names the app without
   // GitHub treating NEO as a manuscript co-author (Co-authored-by).
   // useConfigOnly: no guessed gord@host author when the writer has no git identity.
-  const subject = historyCommitSubject(kind);
-  await runGit(dir, [
+  let title = '';
+  try {
+    const meta = readJSON(path.join(dir, 'book.json'), {});
+    if (meta && meta.title) title = String(meta.title);
+  } catch { /* title is for the subject and the log line */ }
+  const subject = historyCommitSubject(kind, title);
+  await runGit(cwd, [
     '-c', 'user.useConfigOnly=true',
     '-c', 'commit.gpgsign=false',
     '-c', 'core.hooksPath=' + historyHooksPath(),
@@ -2700,20 +2743,16 @@ async function commitBookHistory(dir, kind) {
   ]);
   let commit = '';
   try {
-    commit = String((await runGit(dir, ['rev-parse', '--short', 'HEAD'])).stdout || '').trim();
+    commit = String((await runGit(cwd, ['rev-parse', '--short', 'HEAD'])).stdout || '').trim();
   } catch (err) {
     logError('history', err);
   }
-  let title = '';
-  try {
-    const meta = readJSON(path.join(dir, 'book.json'), {});
-    if (meta && meta.title) title = String(meta.title);
-  } catch { /* title is only for the log line */ }
   logHistory(
     'checkpoint saved' +
     ' book=' + path.basename(dir) +
     (title ? ' title=' + JSON.stringify(title) : '') +
     (kind ? ' kind=' + kind : '') +
+    (cwd !== dir ? ' repo=' + cwd : '') +
     (commit ? ' commit=' + commit : '')
   );
 }
