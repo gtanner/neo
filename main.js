@@ -2526,6 +2526,8 @@ let versionTrackingState = false;
 let versionTrackingKnown = false;
 let historyRunning = false;
 let historySoon = null;
+// one hung git must not leave historyRunning true forever
+let HISTORY_GIT_TIMEOUT_MS = 60 * 1000;
 
 // snapshots/ is NEO's own history; leave it out of the book's git.
 const HISTORY_IGNORE = ['*.tmp', '*.bak', '.DS_Store', 'snapshots'];
@@ -2543,7 +2545,9 @@ function runGit(cwd, args) {
     execFile('git', args, {
       cwd,
       env: Object.assign({}, process.env, { GIT_TERMINAL_PROMPT: '0' }),
-      windowsHide: true
+      windowsHide: true,
+      timeout: HISTORY_GIT_TIMEOUT_MS,
+      killSignal: 'SIGKILL'
     }, (err, stdout, stderr) => {
       if (err) {
         if (stdout) err.stdout = stdout;
@@ -2557,13 +2561,35 @@ function runGit(cwd, args) {
 }
 
 // Empty string when the key is unset (git exits 1). ENOENT still throws.
+// Cwd is only where git runs; config is global. Prefer the library when it
+// exists so a missing folder is not mistaken for a missing git binary.
 async function gitConfigGet(key) {
+  const cwd = (LIBRARY_DIR && fs.existsSync(LIBRARY_DIR)) ? LIBRARY_DIR : os.tmpdir();
   try {
-    return String((await runGit(LIBRARY_DIR, ['config', '--get', key])).stdout || '').trim();
+    return String((await runGit(cwd, ['config', '--get', key])).stdout || '').trim();
   } catch (err) {
     if (err && err.code === 'ENOENT') throw err;
     return '';
   }
+}
+
+// Writer's git identity, or a coded error: ENOENT (no git) / NEO_GIT_IDENTITY.
+async function requireGitIdentity() {
+  let name = '';
+  let email = '';
+  try {
+    name = await gitConfigGet('user.name');
+    email = await gitConfigGet('user.email');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') throw err;
+    throw err;
+  }
+  if (!name || !email) {
+    const err = new Error('git identity missing');
+    err.code = 'NEO_GIT_IDENTITY';
+    throw err;
+  }
+  return { name, email };
 }
 
 async function logGitIdentity() {
@@ -2580,7 +2606,17 @@ async function logGitIdentity() {
   }
 }
 
-// The three lines, added only when missing. A file that already has them
+// Cloud sync + .git is a known corruption risk. Path only — no network.
+function libraryLooksSynced() {
+  const p = String(LIBRARY_DIR || '').toLowerCase().replace(/\\/g, '/');
+  if (!p) return false;
+  if (p.includes('/mobile documents/') || p.includes('/icloud')) return true;
+  if (p.includes('/dropbox') || p.includes('/onedrive') || p.includes('/one drive')) return true;
+  if (p.includes('/google drive') || p.includes('/googledrive')) return true;
+  return false;
+}
+
+// The four lines, added only when missing. A file that already has them
 // is history of its own and is not rewritten.
 function ensureHistoryGitignore(dir) {
   const file = path.join(dir, '.gitignore');
@@ -2643,13 +2679,15 @@ function historyCommitSubject(kind) {
 }
 
 async function commitBookHistory(dir, kind) {
+  // identity before init: no empty .git left behind when commits cannot run
+  await requireGitIdentity();
   if (!fs.existsSync(path.join(dir, '.git'))) await runGit(dir, ['init']);
   if (!ensureHistoryGitignore(dir)) return;
   const status = await runGit(dir, ['status', '--porcelain']);
   if (!String(status.stdout || '').trim()) return;
   await runGit(dir, ['add', '-A']);
-  // Author from the writer's git config, the way an agent commit does.
-  // NEO only appears as Co-authored-by, with the app version.
+  // Author from the writer's git config. Neo-Version names the app without
+  // GitHub treating NEO as a manuscript co-author (Co-authored-by).
   // useConfigOnly: no guessed gord@host author when the writer has no git identity.
   const subject = historyCommitSubject(kind);
   await runGit(dir, [
@@ -2658,7 +2696,7 @@ async function commitBookHistory(dir, kind) {
     '-c', 'core.hooksPath=' + historyHooksPath(),
     'commit',
     '-m', subject,
-    '-m', 'Co-authored-by: NEO ' + app.getVersion() + ' <neo@localhost>'
+    '-m', 'Neo-Version: ' + app.getVersion()
   ]);
   let commit = '';
   try {
@@ -2688,6 +2726,12 @@ async function commitHistories() {
   try {
     const lib = readJSON(LIBRARY_FILE, {});
     if (!lib || lib.versionTracking !== true) return;
+    try {
+      await requireGitIdentity();
+    } catch (err) {
+      logError('history', err);
+      return;
+    }
     let names;
     try {
       names = fs.readdirSync(LIBRARY_DIR);
@@ -2741,7 +2785,7 @@ async function checkpointBook(bookId, kind) {
     try {
       await commitBookHistory(dir, kind);
     } catch (err) {
-      if (err && err.code === 'ENOENT') {
+      if (err && (err.code === 'ENOENT' || err.code === 'NEO_GIT_IDENTITY')) {
         logError('history', err);
         return;
       }
@@ -2764,6 +2808,26 @@ function scheduleHistorySoon() {
     runHistoryPass();
   }, 1000);
 }
+
+// Before File → Version History turns on: git present, identity set.
+// Sync warning is advisory — the writer can still enable.
+ipcMain.handle('versionTracking:prepare', async () => {
+  try {
+    await requireGitIdentity();
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      logHistory('git not found');
+      return { ok: false, reason: 'no-git' };
+    }
+    if (err && err.code === 'NEO_GIT_IDENTITY') {
+      logHistory('git identity missing');
+      return { ok: false, reason: 'no-identity' };
+    }
+    logError('history', err);
+    return { ok: false, reason: 'failed' };
+  }
+  return { ok: true, syncWarn: libraryLooksSynced() };
+});
 
 // The window reports the stored preference when the library loads, and
 // again when the writer uses the checkbox. The first report only ticks

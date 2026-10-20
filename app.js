@@ -17780,10 +17780,36 @@ window.neo.onMenu(async (msg) => {
     if (window.neo.writingStyleState) window.neo.writingStyleState(library.writingStyle);
   }
   if (msg.type === 'versionTracking') {
-    library.versionTracking = !library.versionTracking;
-    await writeLibrary(library);
-    if (window.neo.versionTrackingState) window.neo.versionTrackingState(!!library.versionTracking);
-    toast(library.versionTracking ? t('Version history on') : t('Version history off'));
+    if (library.versionTracking) {
+      library.versionTracking = false;
+      await writeLibrary(library);
+      if (window.neo.versionTrackingState) window.neo.versionTrackingState(false);
+      toast(t('Version history off'));
+    } else {
+      // refuse to enable when git or identity is missing; warn on cloud-synced libraries
+      let prep = { ok: true, syncWarn: false };
+      try {
+        if (window.neo.versionTrackingPrepare) prep = await window.neo.versionTrackingPrepare();
+      } catch (err) {
+        console.error(err);
+        toast(t('Version history could not start.'));
+        return;
+      }
+      if (!prep || !prep.ok) {
+        const why = prep && prep.reason;
+        if (why === 'no-git') toast(t('Version history needs Git on this computer.'));
+        else if (why === 'no-identity') toast(t('Version history needs a git name and email set first.'));
+        else toast(t('Version history could not start.'));
+        return;
+      }
+      library.versionTracking = true;
+      await writeLibrary(library);
+      if (window.neo.versionTrackingState) window.neo.versionTrackingState(true);
+      toast(t('Version history on'));
+      if (prep.syncWarn) {
+        toast(t('Version history uses a git folder in each book. Cloud sync can corrupt it.'));
+      }
+    }
   }
   if (msg.type === 'coverArt') openCoverArt();
   // a script's lines sit where they print: no alignment, poetry or flush

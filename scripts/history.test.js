@@ -17,6 +17,53 @@ const localRequire = createRequire(path.join(root, 'main.js'));
 const source = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 const JSZip = localRequire('jszip');
 
+// Self-contained identity so CI runners without git user.* still pass.
+const TEST_GIT_NAME = 'Neo History Test';
+const TEST_GIT_EMAIL = 'neo-history-test@example.com';
+const testGitHome = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-history-git-home-'));
+const testGitConfig = path.join(testGitHome, 'gitconfig');
+fs.writeFileSync(testGitConfig, '[user]\n\tname = ' + TEST_GIT_NAME + '\n\temail = ' + TEST_GIT_EMAIL + '\n');
+const blankGitConfig = path.join(testGitHome, 'gitconfig-blank');
+fs.writeFileSync(blankGitConfig, '');
+
+const savedGitEnv = {
+  HOME: process.env.HOME,
+  USERPROFILE: process.env.USERPROFILE,
+  GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+  GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM,
+  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME,
+  GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
+  GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME,
+  GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL
+};
+
+function applyTestGitIdentity() {
+  process.env.HOME = testGitHome;
+  process.env.USERPROFILE = testGitHome;
+  process.env.GIT_CONFIG_GLOBAL = testGitConfig;
+  process.env.GIT_CONFIG_SYSTEM = blankGitConfig;
+  delete process.env.XDG_CONFIG_HOME;
+  delete process.env.GIT_AUTHOR_NAME;
+  delete process.env.GIT_AUTHOR_EMAIL;
+  delete process.env.GIT_COMMITTER_NAME;
+  delete process.env.GIT_COMMITTER_EMAIL;
+}
+
+function restoreGitEnv(extra) {
+  const from = extra || savedGitEnv;
+  for (const [key, value] of Object.entries(from)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+applyTestGitIdentity();
+process.on('exit', () => {
+  restoreGitEnv(savedGitEnv);
+  try { fs.rmSync(testGitHome, { recursive: true, force: true }); } catch { /* best effort */ }
+});
+
 function loadMain() {
   const handlers = new Map();
   const listeners = new Map();
@@ -106,14 +153,6 @@ function commitCount(dir) {
   return Number(gitOut(dir, ['rev-list', '--count', 'HEAD']));
 }
 
-function gitUserName() {
-  return execFileSync('git', ['config', 'user.name'], { encoding: 'utf8' }).trim();
-}
-
-function gitUserEmail() {
-  return execFileSync('git', ['config', 'user.email'], { encoding: 'utf8' }).trim();
-}
-
 function logIdentity() {
   return vm.runInContext('logGitIdentity()', main.context);
 }
@@ -121,10 +160,10 @@ function logIdentity() {
 function assertHistoryCommit(folder, subject = 'Version history') {
   const version = localRequire('./package.json').version;
   assert.equal(gitOut(folder, ['log', '-1', '--format=%s']), subject);
-  assert.equal(gitOut(folder, ['log', '-1', '--format=%an']), gitUserName());
+  assert.equal(gitOut(folder, ['log', '-1', '--format=%an']), TEST_GIT_NAME);
   assert.match(
     gitOut(folder, ['log', '-1', '--format=%b']),
-    new RegExp('^Co-authored-by: NEO ' + version.replace(/\./g, '\\.') + ' <neo@localhost>$')
+    new RegExp('^Neo-Version: ' + version.replace(/\./g, '\\.') + '$')
   );
 }
 
@@ -218,8 +257,8 @@ describe('version history', { concurrency: 1 }, () => {
       assert.match(
         lines.join('\n'),
         new RegExp(
-          'git identity name=' + JSON.stringify(gitUserName()).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
-          ' email=' + JSON.stringify(gitUserEmail()).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          'git identity name=' + JSON.stringify(TEST_GIT_NAME).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+          ' email=' + JSON.stringify(TEST_GIT_EMAIL).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         )
       );
     } finally {
@@ -234,17 +273,6 @@ describe('version history', { concurrency: 1 }, () => {
     const blank = path.join(home, 'gitconfig');
     fs.writeFileSync(blank, '');
     const savedPath = process.env.PATH;
-    const saved = {
-      HOME: process.env.HOME,
-      USERPROFILE: process.env.USERPROFILE,
-      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-      GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM,
-      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME,
-      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
-      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME,
-      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL
-    };
     try {
       process.env.PATH = empty;
       let lines = await withHistoryConsole(async () => { await logIdentity(); });
@@ -264,10 +292,7 @@ describe('version history', { concurrency: 1 }, () => {
       assert.match(lines.join('\n'), /git identity name="" email=""/);
     } finally {
       process.env.PATH = savedPath;
-      for (const [key, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
+      applyTestGitIdentity();
       fs.rmSync(empty, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(dir, { recursive: true, force: true });
@@ -360,17 +385,6 @@ describe('version history', { concurrency: 1 }, () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-no-git-id-'));
     const blank = path.join(home, 'gitconfig');
     fs.writeFileSync(blank, '');
-    const saved = {
-      HOME: process.env.HOME,
-      USERPROFILE: process.env.USERPROFILE,
-      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-      GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM,
-      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME,
-      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
-      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME,
-      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL
-    };
     try {
       const first = main.call('book:create', { title: 'One', author: 'Ada' });
       const second = main.call('book:create', { title: 'Two', author: 'Ada' });
@@ -390,33 +404,87 @@ describe('version history', { concurrency: 1 }, () => {
 
       const lines = await withHistoryConsole(async () => { await histories(); });
       const log = fs.readFileSync(path.join(dir, 'neo-errors.log'), 'utf8');
-      assert.equal((log.match(/\[history\]/g) || []).length, 2);
-      assert.match(log, /author|identity|user\.|who you are/i);
-      assert.equal(lines.some((l) => /author|identity|user\.|who you are/i.test(l)), true);
+      // one refusal for the whole pass — no per-book git init
+      assert.equal((log.match(/\[history\]/g) || []).length, 1);
+      assert.match(log, /identity/i);
+      assert.equal(lines.some((l) => /identity/i.test(l)), true);
       assert.equal(lines.some((l) => l.includes('checkpoint saved')), false);
       for (const book of [first, second]) {
         const folder = path.join(dir, book.id);
         const file = path.join(folder, 'chapters', 'c1.html');
         assert.equal(fs.readFileSync(file, 'utf8'), html);
-        assert.equal(fs.existsSync(path.join(folder, '.git')), true);
-        let head = true;
-        try {
-          execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
-            cwd: folder,
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'pipe']
-          });
-        } catch {
-          head = false;
-        }
-        assert.equal(head, false);
+        assert.equal(fs.existsSync(path.join(folder, '.git')), false);
       }
     } finally {
-      for (const [key, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
+      applyTestGitIdentity();
       fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('prepare refuses without git or identity; warns on a synced path', async () => {
+    const dir = tempLibrary();
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-no-git-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-no-git-id-'));
+    const blank = path.join(home, 'gitconfig');
+    fs.writeFileSync(blank, '');
+    const savedPath = process.env.PATH;
+    try {
+      await withHistoryConsole(async () => {
+        let prep = await main.call('versionTracking:prepare');
+        assert.equal(prep.ok, true);
+        assert.equal(prep.syncWarn, false);
+
+        process.env.PATH = empty;
+        prep = await main.call('versionTracking:prepare');
+        assert.equal(prep.ok, false);
+        assert.equal(prep.reason, 'no-git');
+
+        process.env.PATH = savedPath;
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        process.env.GIT_CONFIG_GLOBAL = blank;
+        process.env.GIT_CONFIG_SYSTEM = blank;
+        delete process.env.XDG_CONFIG_HOME;
+        prep = await main.call('versionTracking:prepare');
+        assert.equal(prep.ok, false);
+        assert.equal(prep.reason, 'no-identity');
+
+        applyTestGitIdentity();
+        const synced = path.join(dir, 'Dropbox', 'NEO Library');
+        vm.runInContext('LIBRARY_DIR = ' + JSON.stringify(synced), main.context);
+        prep = await main.call('versionTracking:prepare');
+        assert.equal(prep.ok, true);
+        assert.equal(prep.syncWarn, true);
+      });
+    } finally {
+      process.env.PATH = savedPath;
+      applyTestGitIdentity();
+      main.pointAt(dir);
+      fs.rmSync(empty, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a hung git clears historyRunning', async () => {
+    if (process.platform === 'win32') return; // PATH shim is a shell script
+    const dir = tempLibrary();
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-slow-git-'));
+    fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    try {
+      const book = main.call('book:create', { title: 'Hello', author: 'Ada' });
+      setTracking(true);
+      vm.runInContext('HISTORY_GIT_TIMEOUT_MS = 200', main.context);
+      process.env.PATH = bin + path.delimiter + savedPath;
+      await withHistoryConsole(async () => { await histories(); });
+      assert.equal(vm.runInContext('historyRunning', main.context), false);
+      assert.equal(fs.existsSync(path.join(dir, book.id, '.git')), false);
+    } finally {
+      process.env.PATH = savedPath;
+      vm.runInContext('HISTORY_GIT_TIMEOUT_MS = 60 * 1000', main.context);
+      fs.rmSync(bin, { recursive: true, force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
